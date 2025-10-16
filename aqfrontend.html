@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>City Selector</title>
+</head>
+<body>
+  <h1>Select a City</h1>
+
+  <!-- City selection form -->
+  <form action="/get_data" method="POST">
+    <select name="city">
+      <option value="Heraklion">Heraklion</option>
+      <option value="Athens">Athens</option>
+      <option value="Thessaloniki">Thessaloniki</option>
+      <option value="Patras">Patras</option>
+      <option value="Larissa">Larissa</option>
+      <option value="Chania">Chania</option>
+    </select>
+    <br><br>
+    <input type="submit" value="Get Air Quality Data">
+  </form>
+
+  <h3>Find Most Polluted / Cleanest City</h3>
+
+  <!-- Buttons to fetch stats -->
+  <div>
+    <button onclick="getStat('o3')">Show City with Highest O₃</button>
+    <button onclick="getStat('co')">Show City with Highest CO</button>
+    <button onclick="getStat('no2')">Show City with Highest NO₂</button>
+    <button onclick="getStat('most_polluted')">Show Most Polluted City Overall</button>
+    <button onclick="getStat('cleanest')">Show Cleanest City Overall</button>
+    <button onclick="window.location.href='/map'">Show Map</button>
+  </div>
+
+  <!-- Where results will appear -->
+  <div id="pollutedResult" style="margin-top: 20px; font-size: 18px; font-weight: bold;"></div>
+
+  <script>
+  function getStat(param) {
+    fetch(`/most_polluted/${param}`)
+      .then(response => response.text())
+      .then(data => {
+        document.getElementById("pollutedResult").innerHTML = data;
+      })
+      .catch(error => {
+        console.error("Error fetching data:", error);
+        document.getElementById("pollutedResult").innerHTML = "Error fetching data.";
+      });
+  }
+  </script>
+
+  <h3>Compare Two Cities</h3>
+    <div>
+    <label for="city1">City 1:</label>
+    <select id="city1">
+      <option value="Athens">Athens</option>
+      <option value="Heraklion">Heraklion</option>
+      <option value="Thessaloniki">Thessaloniki</option>
+      <option value="Patras">Patras</option>
+      <option value="Larissa">Larissa</option>
+      <option value="Chania">Chania</option>
+    </select>
+
+    <label for="city2">City 2:</label>
+    <select id="city2">
+      <option value="Athens">Athens</option>
+      <option value="Heraklion">Heraklion</option>
+      <option value="Thessaloniki">Thessaloniki</option>
+      <option value="Patras">Patras</option>
+      <option value="Larissa">Larissa</option>
+      <option value="Chania">Chania</option>
+    </select>
+
+    <label for="parameter">Pollutant:</label>
+    <select id="parameter">
+      <option value="O₃ mass">O₃</option>
+      <option value="CO mass">CO</option>
+      <option value="NO₂ mass">NO₂</option>
+    </select>
+
+    <button onclick="compareCities()">Compare</button>
+  </div>
+
+<canvas id="compareChart" width="600" height="300"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  async function compareCities() {
+    const city1 = document.getElementById("city1").value;
+    const city2 = document.getElementById("city2").value;
+    const parameter = document.getElementById("parameter").value;
+
+    const res = await fetch("/compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ city1, city2, parameter })
+    });
+
+    const data = await res.json();
+
+    // destroy old chart if exists
+    if (window.compareChartInstance) {
+      window.compareChartInstance.destroy();
+    }
+
+    const ctx = document.getElementById("compareChart").getContext("2d");
+
+    window.compareChartInstance = new Chart(ctx, {
+      type: "bar",  // or "line" if you prefer
+      data: {
+        labels: data.labels,
+        datasets: data.datasets.map(ds => ({
+          ...ds,
+          spanGaps: true,
+          borderWidth: 2
+        }))
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          title: {
+            display: true,
+            text: `Monthly ${parameter} Comparison between ${city1} and ${city2}`
+          },
+          legend: { position: "top" }
+        },
+        scales: {
+          x: { title: { display: true, text: "Month" } },
+          y: { title: { display: true, text: "Average Value" } }
+        }
+      }
+    });
+  }
+</script>
+
+
+</body>
+</html>
