@@ -1,4 +1,4 @@
-🧭 3. Pollution Map Enhancements
+ 3. Pollution Map Enhancements
 
 Goal: Make the map analytical.
 
@@ -13,3 +13,4 @@ Circle size proportional to pollution intensity.
 Tooltip on hover: “Athens – 432 µg/m³ (O₃)”
 
 Library: Leaflet.js already supports this easily.
+
