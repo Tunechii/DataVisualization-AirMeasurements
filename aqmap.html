@@ -1,60 +1,157 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Air Quality Map</title>
+  <meta charset="UTF-8">
+  <title>Air Quality Map of Greece</title>
+
+  <!-- Bootstrap & Leaflet -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+
   <style>
-    #map { height: 600px; width: 100%; }
+    body {
+      background-color: #f8f9fa;
+      font-family: "Segoe UI", Roboto, sans-serif;
+    }
+
+    #map {
+      height: 600px;
+      width: 100%;
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .legend {
+      position: absolute;
+      bottom: 30px;
+      left: 30px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 8px;
+      padding: 10px 15px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      font-size: 14px;
+    }
+
+    .legend span {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-right: 6px;
+      border-radius: 50%;
+    }
   </style>
 </head>
-<body>
-  <h2>Air Quality Map of Greece</h2>
-  <div id="map"></div>
 
+<body>
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg bg-white shadow-sm mb-3">
+    <div class="container-fluid">
+      <a href="/" class="btn btn-outline-primary">
+        <i class="bi bi-arrow-left"></i> Back to Dashboard
+      </a>
+      <span class="navbar-brand mx-auto fw-bold text-primary">
+        🌍 Air Quality Map of Greece
+      </span>
+    </div>
+  </nav>
+
+  <!-- Selector -->
+  <div class="container mb-4">
+    <div class="card shadow-sm p-3 border-0">
+      <div class="row align-items-center">
+        <div class="col-md-6 mx-auto text-center">
+          <label for="gasSelect" class="form-label fw-bold mb-2">Select Pollutant:</label>
+          <select id="gasSelect" class="form-select w-auto d-inline-block" onchange="updateMap()">
+            <option value="o3">O₃ (Ozone)</option>
+            <option value="co">CO (Carbon Monoxide)</option>
+            <option value="no2">NO₂ (Nitrogen Dioxide)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map Container -->
+  <div class="container">
+    <div id="map"></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <b>Pollution Level</b><br>
+    <span style="background:#00b300"></span> Low<br>
+    <span style="background:#ffcc00"></span> Moderate<br>
+    <span style="background:#ff6600"></span> High<br>
+    <span style="background:#cc0000"></span> Very High
+  </div>
+
+  <!-- JS Logic -->
   <script>
     const cityCoords = {
-    "Athens": [37.9838, 23.7275],
-    "Heraklion": [35.341846, 25.148254],
-    "Thessaloniki": [40.6401, 22.9444],
-    "Patras": [38.24444, 21.73444],
-    "Larissa": [39.643452, 	22.413208],
-    "Chania": [35.51124, 24.02921]
-
-};
+      "Athens": [37.9838, 23.7275],
+      "Heraklion": [35.341846, 25.148254],
+      "Thessaloniki": [40.6401, 22.9444],
+      "Patras": [38.24444, 21.73444],
+      "Larissa": [39.643452, 	22.413208],
+      "Chania": [35.51124, 24.02921],
+      "Volos": [39.3610, 22.9420],
+      "Grevena": [40.08452, 21.42744],
+      "Kozani":[40.30069, 21.78896],
+      "Karditsa": [39.36485, 21.92191],
+      "Trikala":[39.55493, 21.76837]
+    };
 
     const map = L.map('map').setView([38.5, 23.7], 6);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
-      attribution: '© OpenStreetMap'
+      attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
-    // Fetch pollution data from backend
-    fetch('/map_data')
-      .then(response => response.json())
-      .then(data => {
-        Object.keys(data).forEach(city => {
-          const value = data[city];
-          const coords = cityCoords[city];
+    let markers = [];
 
-          if (coords) {
-            const color =
-              value < 100 ? "green" :
-              value < 200 ? "yellow" :
-              value < 300 ? "orange" : "red";
+    async function updateMap() {
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
 
-            L.circleMarker(coords, {
-              radius: 20,
-              color: color,
-              fillColor: color,
-              fillOpacity: 0.6
-            })
-            .addTo(map)
-            .bindPopup(`<b>${city}</b><br>Avg Pollution: ${value.toFixed(1)}`);
-          }
-        });
+      const gas = document.getElementById("gasSelect").value;
+      const res = await fetch(`/map_data/${gas}`);
+      const data = await res.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        alert("No data found for this pollutant!");
+        return;
+      }
+
+      data.forEach(item => {
+        const coords = cityCoords[item.city];
+        if (!coords) return;
+
+        const value = item.avg_value;
+        const color =
+          value < 100 ? "#00b300" :
+          value < 200 ? "#ffcc00" :
+          value < 300 ? "#ff6600" :
+          "#cc0000";
+
+        const marker = L.circleMarker(coords, {
+          radius: 20,
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.6
+        })
+        .bindPopup(`<b>${item.city}</b><br>${gas.toUpperCase()} Avg: ${value.toFixed(1)}`)
+        .addTo(map);
+
+        markers.push(marker);
       });
+    }
+
+    updateMap();
   </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

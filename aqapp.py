@@ -3,9 +3,13 @@ from database import AirQualityReading, SessionLocal
 from datetime import datetime
 import requests
 import json
-from sqlalchemy import func, desc, asc
+from sqlalchemy import func, desc, asc, and_
 from flask import jsonify
 from sqlalchemy import extract
+from flask import Flask, request, render_template, redirect, url_for, Response
+from datetime import datetime, timezone
+
+
 
 
 app = Flask(__name__)
@@ -16,7 +20,12 @@ city_coords = {
     "Thessaloniki": [40.6401, 22.9444],
     "Patras": [38.24444, 21.73444],
     "Larissa": [39.643452, 	22.413208],
-    "Chania": [35.51124, 24.02921]
+    "Chania": [35.51124, 24.02921],
+    "Volos": [39.3610, 22.9420],
+    "Grevena": [40.08452, 21.42744],
+    "Kozani":[40.30069, 21.78896],
+    "Karditsa": [39.36485, 21.92191],
+    "Trikala":[39.55493, 21.76837]
 
 }
 
@@ -28,154 +37,214 @@ def index():
         return file.read()
 
 
-# ... (keep your imports and Flask setup)
+from flask import Response
+from datetime import datetime, timezone
+import json
+import requests
+
+from flask import Response
+from datetime import datetime, timezone
+
+from flask import request, Response
+from datetime import datetime, timezone
+import requests
+import json
+from sqlalchemy.orm import Session
 
 @app.route("/get_data", methods=["POST"])
 def get_data():
     city = request.form["city"]
-    coordinates = city_coords.get(city)
-    if not coordinates:
-        return f"Unknown city: {city}", 400
 
-    lat, lon = coordinates
-    headers = {"X-API-Key": API_KEY}
-    url = f"https://api.openaq.org/v3/locations?coordinates={lat},{lon}&radius=9000&limit=1000"
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        return f"Error fetching locations: {response.status_code}"
+    # read date filters
+    start_date = request.form.get("start_date")
+    end_date = request.form.get("end_date")
 
-    results = response.json().get("results", [])
-    if not results:
-        return "No sensors found."
-
-    raw_readings_by_param = {3: [], 4: [], 5: []}  # O₃, CO, NO₂
-
-    for location in results:
-        for sensor in location.get("sensors", []):
-            param_id = sensor["parameter"]["id"]
-            if param_id in raw_readings_by_param:
-                sensor_id = sensor["id"]
-                sensor_url = f"https://api.openaq.org/v3/sensors/{sensor_id}/days/monthly?limit=24"
-                r = requests.get(sensor_url, headers=headers)
-                if r.status_code == 200:
-                    data = r.json().get("results", [])
-                    for measurement in data:
-                        value = measurement.get("value")
-                        period = measurement.get("period", {})
-                        time = period.get("datetimeFrom", {}).get("utc")
-                        if value is not None and time:
-                            raw_readings_by_param[param_id].append({
-                                "value": value,
-                                "time": time,
-                                "sensor": sensor["parameter"]["displayName"],
-                                "location": location["name"]
-                            })
+    if start_date:
+        start_date = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+    if end_date:
+        end_date = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
 
     db = SessionLocal()
-    results_html = f"<h2>Most Recent Unique-Timestamp Readings for {city}</h2><ul>"
-    chart_data = {}  # store data for separate charts
 
-    param_names = {3: "O₃", 4: "CO", 5: "NO₂"}
+    # Create initial query
+    query = db.query(AirQualityReading).filter(AirQualityReading.city == city)
 
-    for param_id, readings in raw_readings_by_param.items():
-        if not readings:
-            results_html += f"<li><strong>{param_names[param_id]}</strong>: No data available.</li>"
-            continue
+    # Apply date filters only if provided
+    if start_date:
+        query = query.filter(AirQualityReading.time >= start_date)
+    if end_date:
+        query = query.filter(AirQualityReading.time <= end_date)
 
-        sorted_readings = sorted(readings, key=lambda x: x["time"], reverse=True)
-        seen_times = set()
-        unique_readings = []
+    # Execute query
+    db_readings = query.order_by(AirQualityReading.time.asc()).all()
+    print(f"[DEBUG] DB returned {len(db_readings)} rows for city {city}")
 
-        for entry in sorted_readings:
-            if entry["time"] not in seen_times:
-                unique_readings.append(entry)
-                seen_times.add(entry["time"])
-            if len(unique_readings) == 24:
-                break
+    # If DB is empty → fetch from API
+    if not db_readings:
+        lat, lon = city_coords.get(city)
+        headers = {"X-API-Key": API_KEY}
+        url = f"https://api.openaq.org/v3/locations?coordinates={lat},{lon}&radius=9000&limit=1000"
+        res = requests.get(url, headers=headers).json().get("results", [])
 
-        if unique_readings:
-            sensor_name = unique_readings[0]['sensor']
-            results_html += f"<li><strong>{sensor_name}</strong> readings:<ul>"
-            times = []
-            values = []
-            for entry in unique_readings:
-                db.add(AirQualityReading(
-                    city=city,
-                    parameter=entry['sensor'],
-                    value=entry['value'],
-                    time=datetime.fromisoformat(entry['time'].replace("Z", "+00:00")),
-                    location=entry['location']
-                ))
-                results_html += f"<li>{entry['time']} ({entry['location']}): {entry['value']}</li>"
-                times.append(entry['time'])
-                values.append(entry['value'])
-            chart_data[param_names[param_id]] = {"times": times[::-1], "values": values[::-1]}
-            results_html += "</ul></li>"
-        else:
-            results_html += f"<li><strong>{param_names[param_id]}</strong>: No unique timestamp data available.</li>"
+        for location in res:
+            for sensor in location.get("sensors", []):
+                if sensor["parameter"]["id"] not in (3, 4, 5):
+                    continue
 
-    db.commit()
+                s_url = f"https://api.openaq.org/v3/sensors/{sensor['id']}/days/monthly?limit=24"
+                r = requests.get(s_url, headers=headers)
+                if r.status_code != 200:
+                    continue
+
+                for m in r.json().get("results", []):
+                    time_str = m.get("period", {}).get("datetimeFrom", {}).get("utc")
+                    value = m.get("value")
+                    if not time_str or value is None:
+                        continue
+
+                    time = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                    db.add(AirQualityReading(
+                        city=city,
+                        parameter=sensor["parameter"]["displayName"],
+                        value=float(value),
+                        time=time,
+                        location=location["name"]
+                    ))
+
+        db.commit()
+
+        # reload filtered data
+        query = db.query(AirQualityReading).filter(AirQualityReading.city == city)
+        if start_date:
+            query = query.filter(AirQualityReading.time >= start_date)
+        if end_date:
+            query = query.filter(AirQualityReading.time <= end_date)
+        db_readings = query.order_by(AirQualityReading.time.asc()).all()
+
     db.close()
-    results_html += "</ul>"
 
-    # HTML with separate charts
-    chart_html = "<h2>Air Quality Charts</h2>"
-    chart_html += "".join(
-        f'<h3>{param}</h3><canvas id="{param}Chart" width="800" height="400"></canvas>'
-        for param in chart_data.keys()
-    )
+    # --- 2️⃣ Align times and chart data ---
+    param_map = {"O₃ mass": "O₃", "CO mass": "CO", "NO₂ mass": "NO₂"}
+    all_times = sorted({row.time for row in db_readings})
+    times = [t.isoformat() for t in all_times]
 
-    chart_html += "<script src='https://cdn.jsdelivr.net/npm/chart.js'></script><script>"
-    for param, data in chart_data.items():
+    chart_data = {"O₃": [], "CO": [], "NO₂": []}
+    data_dict = {param: {} for param in chart_data}
+
+    for row in db_readings:
+        param = param_map.get(row.parameter)
+        if not param:
+            continue
+        data_dict[param][row.time] = row.value
+
+    for t in all_times:
+        for param in chart_data:
+            chart_data[param].append(data_dict[param].get(t, None))
+
+    print(f"[DEBUG] First 5 times: {times[:5]}")
+    print(f"[DEBUG] O₃ values (first 5): {chart_data['O₃'][:5]}")
+    print(f"[DEBUG] CO values (first 5): {chart_data['CO'][:5]}")
+    print(f"[DEBUG] NO₂ values (first 5): {chart_data['NO₂'][:5]}")
+
+    # --- 3️⃣ Build HTML with Chart.js ---
+    chart_html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Air Quality Data for {city}</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body {{ background-color: #f8f9fa; }}
+            .chart-card {{
+                border-radius: 1rem;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                padding: 1.5rem;
+                margin-bottom: 2rem;
+                background-color: white;
+            }}
+            .chart-canvas {{
+                max-height: 350px;
+                height: 35vh;
+            }}
+        </style>
+    </head>
+    <body>
+        <nav class="navbar navbar-light bg-white shadow-sm mb-4">
+            <div class="container-fluid">
+                <a href="/" class="btn btn-outline-primary">
+                    <i class="bi bi-arrow-left"></i> Back to Dashboard
+                </a>
+                <span class="navbar-brand mb-0 h1">🌍 Air Quality for {city}</span>
+            </div>
+        </nav>
+        <div class="container">
+            <div class="row">
+                <div class="col-12 mb-3">
+                    <h2 class="text-center text-primary">Air Quality Charts for {city}</h2>
+                </div>
+            </div>
+    """
+
+    # Add one chart per parameter
+    for param in chart_data:
+        chart_html += f"""
+        <div class="chart-card">
+            <h4 class="text-secondary">{param}</h4>
+            <canvas id="{param}Chart" class="chart-canvas"></canvas>
+        </div>
+        """
+
+    # Chart.js script
+    chart_html += "<script>"
+    for param in chart_data:
         chart_html += f"""
         new Chart(document.getElementById('{param}Chart'), {{
             type: 'line',
             data: {{
-                labels: {json.dumps(data['times'])},
+                labels: {json.dumps(times)},
                 datasets: [{{
                     label: '{param}',
-                    data: {json.dumps(data['values'])},
-                    borderWidth: 2
+                    data: {json.dumps(chart_data[param])},
+                    borderColor: 'rgba(54, 162, 235, 0.8)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.3)',
+                    tension: 0.3,
+                    fill: true,
+                    pointRadius: 3,
+                    pointHoverRadius: 6
                 }}]
             }},
             options: {{
                 responsive: true,
+                plugins: {{
+                    tooltip: {{
+                        mode: 'index',
+                        intersect: false
+                    }}
+                }},
                 scales: {{
-                    x: {{ title: {{ display: true, text: 'Time' }}, ticks: {{ maxRotation: 90, minRotation: 45 }} }},
-                    y: {{ title: {{ display: true, text: 'Value' }} }}
+                    x: {{ title: {{ display: true, text: 'Time' }}, ticks: {{ maxRotation: 45, minRotation: 0 }} }},
+                    y: {{ title: {{ display: true, text: 'Value' }}}}
                 }}
             }}
         }});
         """
-    chart_html += "</script>"
+    chart_html += "</script></div></body></html>"
 
-    return f"<html><head><title>Air Quality Data for {city}</title></head><body>{results_html}{chart_html}</body></html>"
+    return Response(chart_html, mimetype="text/html")
 
 
 
-"""@app.route("/most_polluted")
-def most_polluted():
-    db = SessionLocal()
-    
-    # Compute average value per city across all parameters
-    results = (
-        db.query(
-            AirQualityReading.city,
-            func.avg(AirQualityReading.value).label("avg_pollution")
-        )
-        .group_by(AirQualityReading.city)
-        .order_by(func.avg(AirQualityReading.value).desc())
-        .all()
-    )
-    
-    db.close()
-    
-    if not results:
-        return "No data available yet. Please query a city first."
-    
-    most_polluted_city = results[0]
-    
-    return f"<h2>Most Polluted City:</h2><p>{most_polluted_city.city} (Average Value: {most_polluted_city.avg_pollution:.2f})</p>"""
+
+
+
+
+
+
+
+
 
 
 
@@ -247,21 +316,38 @@ def most_polluted(param):
         db.close()
     
 
-@app.route("/map_data")
-def map_data():
+@app.route("/map_data/<param>")
+def map_data(param):
     db = SessionLocal()
-    results = (
-        db.query(
-            AirQualityReading.city,
-            func.avg(AirQualityReading.value).label("avg_pollution")
-        )
-        .group_by(AirQualityReading.city)
-        .all()
-    )
-    db.close()
 
-    city_pollution = {city: avg for city, avg in results}
-    return jsonify(city_pollution)
+    param_map = {
+        "o3": "O₃ mass",
+        "co": "CO mass",
+        "no2": "NO₂ mass"
+    }
+
+    if param not in param_map:
+        db.close()
+        return jsonify({"error": "Invalid pollutant"}), 400
+
+    try:
+        results = (
+            db.query(
+                AirQualityReading.city,
+                func.avg(AirQualityReading.value).label("avg_value")
+            )
+            .filter(AirQualityReading.parameter == param_map[param])
+            .group_by(AirQualityReading.city)
+            .all()
+        )
+
+        data = [{"city": r.city, "avg_value": float(r.avg_value)} for r in results]
+        return jsonify(data)
+
+    finally:
+        db.close()
+
+
 
 @app.route("/map")
 def map_page():
@@ -277,11 +363,13 @@ def compare():
     city1 = data.get("city1")
     city2 = data.get("city2")
     parameter = data.get("parameter")
+    start = data.get("start_date")
+    end = data.get("end_date")
 
     if not city1 or not city2 or not parameter:
         return jsonify({"error": "Missing parameters"}), 400
 
-    # Map pollutant short name to DB-stored parameter name
+    # Convert UI param to DB param
     param_map = {
         "O₃": "O₃ mass",
         "CO": "CO mass",
@@ -289,10 +377,22 @@ def compare():
     }
     parameter = param_map.get(parameter, parameter)
 
+    # Date conversion
+    start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
+    end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
+
+    color_map = {
+        "O₃ mass": ["rgba(191,36,87,0.6)", "rgba(44,86,166,0.8)"],
+        "CO mass": ["rgba(191,36,87,0.6)", "rgba(44,86,166,0.8)"],
+        "NO₂ mass": ["rgba(191,36,87,0.6)", "rgba(44,86,166,0.8)"]
+    }
+    colors = color_map.get(parameter)
+
     db = SessionLocal()
     try:
         month_label = func.strftime('%Y-%m', AirQualityReading.time).label('month')
-        results = (
+
+        query = (
             db.query(
                 AirQualityReading.city,
                 month_label,
@@ -300,9 +400,17 @@ def compare():
             )
             .filter(AirQualityReading.parameter == parameter)
             .filter(AirQualityReading.city.in_([city1, city2]))
-            .group_by(AirQualityReading.city, month_label)
-            .order_by(month_label)
-            .all()
+        )
+
+        if start_dt:
+            query = query.filter(AirQualityReading.time >= start_dt)
+        if end_dt:
+            query = query.filter(AirQualityReading.time <= end_dt)
+
+        results = (
+            query.group_by(AirQualityReading.city, month_label)
+                 .order_by(month_label)
+                 .all()
         )
 
         if not results:
@@ -313,18 +421,49 @@ def compare():
         for city, month, avg in results:
             per_city.setdefault(city, {})[month] = float(avg)
 
-        dataset_city1 = [per_city[city1].get(m, None) for m in months]
-        dataset_city2 = [per_city[city2].get(m, None) for m in months]
+        dataset_city1 = [per_city[city1].get(m) for m in months]
+        dataset_city2 = [per_city[city2].get(m) for m in months]
 
         return jsonify({
             "labels": months,
             "datasets": [
-                {"label": city1, "data": dataset_city1, "backgroundColor": "rgba(54,162,235,0.6)"},
-                {"label": city2, "data": dataset_city2, "backgroundColor": "rgba(255,99,132,0.6)"}
+                {"label": city1, "data": dataset_city1, "borderColor": colors[0], "backgroundColor": colors[0], "fill": False, "tension": 0.3},
+                {"label": city2, "data": dataset_city2, "borderColor": colors[1], "backgroundColor": colors[1], "fill": False, "tension": 0.3}
             ]
         })
+
     finally:
         db.close()
+
+
+@app.route("/filter_city", methods=["POST"])
+def filter_city():
+    data = request.get_json()
+    city = data.get("city")
+    parameter = data.get("parameter")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+
+    db = SessionLocal()
+    query = db.query(AirQualityReading).filter(AirQualityReading.city == city)
+
+    if parameter:
+        query = query.filter(AirQualityReading.parameter == parameter)
+
+    if start_date:
+        query = query.filter(AirQualityReading.time >= datetime.fromisoformat(start_date))
+    if end_date:
+        query = query.filter(AirQualityReading.time <= datetime.fromisoformat(end_date))
+
+    records = query.order_by(AirQualityReading.time).all()
+    db.close()
+
+    return jsonify({
+        "labels": [r.time.isoformat() for r in records],
+        "values": [r.value for r in records],
+        "city": city,
+        "parameter": parameter
+    })
 
 
 

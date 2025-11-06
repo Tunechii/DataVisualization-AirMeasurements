@@ -1,3 +1,15 @@
--make micro changes to text, e.g AVG value index, explain what the avg pollution means
--expand the map features/show more info when u hover over a city
---make a github repo
+🧭 3. Pollution Map Enhancements
+
+Goal: Make the map analytical.
+
+Ideas:
+
+Add a legend (color scale from green → red).
+
+Allow toggling pollutant layers (CO, NO₂, O₃) using radio buttons.
+
+Circle size proportional to pollution intensity.
+
+Tooltip on hover: “Athens – 432 µg/m³ (O₃)”
+
+Library: Leaflet.js already supports this easily.
