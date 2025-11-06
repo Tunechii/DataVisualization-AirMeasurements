@@ -123,7 +123,7 @@ def get_data():
 
     db.close()
 
-    # --- 2️⃣ Align times and chart data ---
+    # --- 2️ Align times and chart data ---
     param_map = {"O₃ mass": "O₃", "CO mass": "CO", "NO₂ mass": "NO₂"}
     all_times = sorted({row.time for row in db_readings})
     times = [t.isoformat() for t in all_times]
@@ -146,7 +146,7 @@ def get_data():
     print(f"[DEBUG] CO values (first 5): {chart_data['CO'][:5]}")
     print(f"[DEBUG] NO₂ values (first 5): {chart_data['NO₂'][:5]}")
 
-    # --- 3️⃣ Build HTML with Chart.js ---
+    # --- 3️ Build HTML with Chart.js ---
     chart_html = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -470,4 +470,5 @@ def filter_city():
 
 
 if __name__ == "__main__":
+
     app.run(debug=True)
